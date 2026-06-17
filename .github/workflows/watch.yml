@@ -9,7 +9,11 @@ on:
   workflow_dispatch:
     inputs:
       test_email:
-        description: "Send a test email instead of checking availability"
+        description: "Send a plain test email instead of checking availability"
+        type: boolean
+        default: false
+      self_test:
+        description: "Run the full alert path on a captured 'available' page and email it"
         type: boolean
         default: false
 
@@ -45,8 +49,17 @@ jobs:
           PYTHONPATH: src
         run: python -m parkingbot.main --test-email
 
+      - name: Self-test full alert path (manual only)
+        if: ${{ inputs.self_test }}
+        env:
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          NOTIFY_TO: ${{ secrets.NOTIFY_TO }}
+          PYTHONPATH: src
+        run: python -m parkingbot.main --self-test
+
       - name: Check availability
-        if: ${{ !inputs.test_email }}
+        if: ${{ !inputs.test_email && !inputs.self_test }}
         env:
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
@@ -55,7 +68,7 @@ jobs:
         run: python -m parkingbot.main --once
 
       - name: Persist state + daily heartbeat
-        if: ${{ !inputs.test_email }}
+        if: ${{ !inputs.test_email && !inputs.self_test }}
         run: |
           # The heartbeat is today's UTC date. It changes at most once per day, so
           # it produces one keep-alive commit daily — enough to stop GitHub from

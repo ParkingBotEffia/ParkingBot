@@ -8,6 +8,9 @@ CLI:
     python -m parkingbot.main --once     # explicit single check
     python -m parkingbot.main --dry-run  # check + log, but never send email/save
     python -m parkingbot.main --test-email   # send one test email and exit
+    python -m parkingbot.main --self-test    # run the REAL alert path on a captured
+                                             # "P4 available" page and email it (proves
+                                             # detection -> opening email -> SMTP)
 """
 
 from __future__ import annotations
@@ -84,6 +87,36 @@ def run_once(dry_run: bool = False) -> int:
     return len(newly_open)
 
 
+def run_self_test() -> None:
+    """Exercise the full alert path against a captured 'P4 available' page.
+
+    Loads the real test fixture, parses it, runs the same transition + email-build
+    + send code production uses, and sends a real (clearly marked) email. This is
+    the only way to prove detection -> opening email -> SMTP end to end without
+    waiting for an actual spot to open. It does NOT touch state.json.
+    """
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    fixture = os.path.join(
+        repo_root, "tests", "fixtures", "valserhone_p4_available.html"
+    )
+    with open(fixture, encoding="utf-8") as fh:
+        html = fh.read()
+
+    lots = parse_lots(html)
+    newly_open = compute_newly_open(lots, previous={})  # empty state -> all open count
+    log.info("Self-test parsed %d lots; newly open: %s",
+             len(lots), ", ".join(lot.code for lot in newly_open) or "none")
+    if not newly_open:
+        raise RuntimeError("Self-test fixture parsed no available lot — parser broken!")
+
+    msg = notify.build_opening_email(newly_open)
+    # Prefix the subject so you know this is a drill, not a real opening.
+    # (EmailMessage forbids re-assigning a header, so replace it.)
+    msg.replace_header("Subject", "[SELF-TEST] " + msg["Subject"])
+    notify.send(msg)
+    log.info("Self-test alert email sent to %s.", os.environ.get("NOTIFY_TO", "<unset>"))
+
+
 def main() -> None:
     load_dotenv()
     _configure_logging()
@@ -95,11 +128,18 @@ def main() -> None:
                         help="check and log, but never send email or write state")
     parser.add_argument("--test-email", action="store_true",
                         help="send one test email to verify SMTP setup, then exit")
+    parser.add_argument("--self-test", action="store_true",
+                        help="run the full alert path on a captured 'available' page "
+                             "and email it, then exit")
     args = parser.parse_args()
 
     if args.test_email:
         notify.send(notify.build_test_email())
         log.info("Test email sent to %s.", os.environ.get("NOTIFY_TO", "<unset>"))
+        return
+
+    if args.self_test:
+        run_self_test()
         return
 
     run_once(dry_run=args.dry_run)
