@@ -54,15 +54,19 @@ jobs:
           PYTHONPATH: src
         run: python -m parkingbot.main --once
 
-      - name: Persist state.json if it changed
+      - name: Persist state + daily heartbeat
         if: ${{ !inputs.test_email }}
         run: |
-          if [[ -n "$(git status --porcelain state.json)" ]]; then
+          # The heartbeat is today's UTC date. It changes at most once per day, so
+          # it produces one keep-alive commit daily — enough to stop GitHub from
+          # auto-disabling the schedule after 60 days of no repository activity.
+          date -u +%Y-%m-%d > heartbeat.txt
+          if [[ -n "$(git status --porcelain state.json heartbeat.txt)" ]]; then
             git config user.name "ParkingBotEffia"
             git config user.email "294556926+ParkingBotEffia@users.noreply.github.com"
-            git add state.json
-            git commit -m "Update availability state [skip ci]"
+            git add state.json heartbeat.txt
+            git commit -m "Update state / heartbeat [skip ci]"
             git push
           else
-            echo "No state change; nothing to commit."
+            echo "No change; nothing to commit."
           fi
