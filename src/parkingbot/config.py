@@ -46,6 +46,14 @@ USER_AGENT = (
 
 HTTP_TIMEOUT = 30  # seconds
 
+# --- Liveness / dead-man's-switch -------------------------------------------
+# Optional healthchecks.io (or compatible) ping URL. On every successful run the
+# watcher GETs this URL; if healthchecks.io receives no ping within its
+# period+grace (~45 min) it emails Léo that the bot stopped running. This is the
+# ONLY way to detect "the scheduler isn't firing" — the bot can't email that
+# itself. Unset => ping is a no-op (safe before setup).
+HEALTHCHECK_URL = os.environ.get("HEALTHCHECK_URL", "")
+
 # --- Canary / weekly system-test --------------------------------------------
 # A parking that reliably HAS subscription availability, used once a week to
 # prove the whole chain (fetch -> parse -> detect -> email) still works without

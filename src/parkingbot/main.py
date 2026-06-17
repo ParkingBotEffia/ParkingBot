@@ -22,6 +22,7 @@ import logging
 import os
 from typing import Dict, List
 
+import requests
 from dotenv import load_dotenv
 
 from . import config, fetch, notify, state
@@ -124,6 +125,24 @@ def run_once(dry_run: bool = False) -> int:
     return len(newly_open)
 
 
+def ping_liveness() -> None:
+    """Best-effort dead-man's-switch ping after a successful run.
+
+    GETs config.HEALTHCHECK_URL so healthchecks.io knows the watcher ran. If the
+    URL is unset it no-ops; any network error is swallowed — the ping must NEVER
+    affect the run's outcome. A *missing* ping (because the scheduler didn't fire,
+    or EFFIA was unreachable) is what triggers healthchecks.io's external alert.
+    """
+    url = config.HEALTHCHECK_URL
+    if not url:
+        return
+    try:
+        requests.get(url, timeout=10)
+        log.info("Liveness ping sent.")
+    except Exception as exc:  # noqa: BLE001 - never let the ping break the run
+        log.warning("Liveness ping failed (ignored): %s", exc)
+
+
 def run_canary() -> None:
     """Weekly end-to-end self-check against an always-available parking (Marseille).
 
@@ -217,6 +236,9 @@ def main() -> None:
         return
 
     run_once(dry_run=args.dry_run)
+    # Liveness ping only on a real (non-dry-run) check that completed without raising.
+    if not args.dry_run:
+        ping_liveness()
 
 
 if __name__ == "__main__":

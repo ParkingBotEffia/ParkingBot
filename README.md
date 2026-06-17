@@ -58,6 +58,15 @@ ruff check .
 back. Required repo secrets: `GMAIL_USER`, `GMAIL_APP_PASSWORD`, `NOTIFY_TO`.
 Use the **Run workflow** button (with *test_email* checked) to send a test email.
 
+## Liveness (dead-man's-switch)
+
+A bot that stops running can't email you — and GitHub only emails on *failed* runs, never
+*missing* ones. So on every successful run the watcher pings an external
+[healthchecks.io](https://healthchecks.io) check (`HEALTHCHECK_URL` secret, best-effort —
+never breaks a run). If healthchecks.io gets no ping within ~45 min (period 5 min + grace
+40 min), **it** emails you that ParkingBot is down. Being external, it catches even a total
+GitHub-scheduler outage. Unset secret ⇒ the ping no-ops.
+
 ## Weekly system-test (canary)
 
 `.github/workflows/canary.yml` runs every **Sunday 18:00 UTC** (and on demand). It runs
