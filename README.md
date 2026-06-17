@@ -54,9 +54,25 @@ ruff check .
 
 ## Deployment (GitHub Actions)
 
-`.github/workflows/watch.yml` runs `--once` on `cron: */5` and commits `state.json`
-back. Required repo secrets: `GMAIL_USER`, `GMAIL_APP_PASSWORD`, `NOTIFY_TO`.
+`.github/workflows/watch.yml` runs `--once` and commits `state.json` back. Required repo
+secrets: `GMAIL_USER`, `GMAIL_APP_PASSWORD`, `NOTIFY_TO`, `HEALTHCHECK_URL`.
 Use the **Run workflow** button (with *test_email* checked) to send a test email.
+
+### Trigger
+
+GitHub's built-in `schedule:` cron proved unreliable for this repo (it ran 0 times in
+hours). The **real trigger is external**: a free [cron-job.org](https://cron-job.org) job
+calls the GitHub API every 5 minutes to dispatch `watch.yml`:
+
+```
+POST https://api.github.com/repos/ParkingBotEffia/ParkingBot/actions/workflows/watch.yml/dispatches
+Authorization: Bearer <fine-grained PAT, this repo, Actions: read/write>
+Accept: application/vnd.github+json
+Body: {"ref":"main"}
+```
+
+The `schedule:` block is kept as a harmless backup (the `concurrency` group prevents
+overlap). If the external trigger ever stops, the dead-man's-switch (above) emails you.
 
 ## Liveness (dead-man's-switch)
 
