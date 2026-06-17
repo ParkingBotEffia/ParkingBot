@@ -1,0 +1,68 @@
+name: watch-effia-valserhone
+
+# Runs the watcher on a schedule (every ~5 min) and on manual trigger.
+# GitHub's cron has a 5-min minimum and may be delayed a few minutes under load;
+# that is fine for this use case.
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+    inputs:
+      test_email:
+        description: "Send a test email instead of checking availability"
+        type: boolean
+        default: false
+
+# Allow the job to push the updated state.json back to the repo.
+permissions:
+  contents: write
+
+# Never let two runs overlap (a slow run + the next schedule tick).
+concurrency:
+  group: watch-effia
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Send test email (manual only)
+        if: ${{ inputs.test_email }}
+        env:
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          NOTIFY_TO: ${{ secrets.NOTIFY_TO }}
+          PYTHONPATH: src
+        run: python -m parkingbot.main --test-email
+
+      - name: Check availability
+        if: ${{ !inputs.test_email }}
+        env:
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          NOTIFY_TO: ${{ secrets.NOTIFY_TO }}
+          PYTHONPATH: src
+        run: python -m parkingbot.main --once
+
+      - name: Persist state.json if it changed
+        if: ${{ !inputs.test_email }}
+        run: |
+          if [[ -n "$(git status --porcelain state.json)" ]]; then
+            git config user.name "ParkingBotEffia"
+            git config user.email "294556926+ParkingBotEffia@users.noreply.github.com"
+            git add state.json
+            git commit -m "Update availability state [skip ci]"
+            git push
+          else
+            echo "No state change; nothing to commit."
+          fi
