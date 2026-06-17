@@ -20,6 +20,10 @@ on:
         description: "Send a test of the 'bot is broken' breakage-alarm email"
         type: boolean
         default: false
+      test_sms:
+        description: "Send a test SMS via Free Mobile to verify SMS setup"
+        type: boolean
+        default: false
 
 # Allow the job to push the updated state.json back to the repo.
 permissions:
@@ -50,6 +54,8 @@ jobs:
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           NOTIFY_TO: ${{ secrets.NOTIFY_TO }}
+          FREE_SMS_USER: ${{ secrets.FREE_SMS_USER }}
+          FREE_SMS_PASS: ${{ secrets.FREE_SMS_PASS }}
           PYTHONPATH: src
         run: python -m parkingbot.main --test-email
 
@@ -59,6 +65,8 @@ jobs:
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           NOTIFY_TO: ${{ secrets.NOTIFY_TO }}
+          FREE_SMS_USER: ${{ secrets.FREE_SMS_USER }}
+          FREE_SMS_PASS: ${{ secrets.FREE_SMS_PASS }}
           PYTHONPATH: src
         run: python -m parkingbot.main --self-test
 
@@ -68,21 +76,33 @@ jobs:
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           NOTIFY_TO: ${{ secrets.NOTIFY_TO }}
+          FREE_SMS_USER: ${{ secrets.FREE_SMS_USER }}
+          FREE_SMS_PASS: ${{ secrets.FREE_SMS_PASS }}
           PYTHONPATH: src
         run: python -m parkingbot.main --health-test
 
+      - name: Send test SMS (manual only)
+        if: ${{ inputs.test_sms }}
+        env:
+          FREE_SMS_USER: ${{ secrets.FREE_SMS_USER }}
+          FREE_SMS_PASS: ${{ secrets.FREE_SMS_PASS }}
+          PYTHONPATH: src
+        run: python -m parkingbot.main --test-sms
+
       - name: Check availability
-        if: ${{ !inputs.test_email && !inputs.self_test && !inputs.health_test }}
+        if: ${{ !inputs.test_email && !inputs.self_test && !inputs.health_test && !inputs.test_sms }}
         env:
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           NOTIFY_TO: ${{ secrets.NOTIFY_TO }}
           HEALTHCHECK_URL: ${{ secrets.HEALTHCHECK_URL }}
+          FREE_SMS_USER: ${{ secrets.FREE_SMS_USER }}
+          FREE_SMS_PASS: ${{ secrets.FREE_SMS_PASS }}
           PYTHONPATH: src
         run: python -m parkingbot.main --once
 
       - name: Persist state + daily heartbeat
-        if: ${{ !inputs.test_email && !inputs.self_test && !inputs.health_test }}
+        if: ${{ !inputs.test_email && !inputs.self_test && !inputs.health_test && !inputs.test_sms }}
         run: |
           # The heartbeat is today's UTC date. It changes at most once per day, so
           # it produces one keep-alive commit daily — enough to stop GitHub from

@@ -13,6 +13,7 @@ CLI:
                                              # detection -> opening email -> SMTP)
     python -m parkingbot.main --health-test  # send a real (marked) breakage-alarm email
     python -m parkingbot.main --canary       # weekly end-to-end self-check (Marseille)
+    python -m parkingbot.main --test-sms     # send a test SMS via Free Mobile
 """
 
 from __future__ import annotations
@@ -216,6 +217,8 @@ def main() -> None:
                         help="send a real (marked) breakage-alarm email, then exit")
     parser.add_argument("--canary", action="store_true",
                         help="weekly end-to-end self-check against Marseille, then exit")
+    parser.add_argument("--test-sms", action="store_true",
+                        help="send a test SMS via Free Mobile to verify setup, then exit")
     args = parser.parse_args()
 
     if args.test_email:
@@ -233,6 +236,11 @@ def main() -> None:
 
     if args.canary:
         run_canary()
+        return
+
+    if args.test_sms:
+        notify.send_sms("ParkingBot — test SMS OK")
+        log.info("Test SMS attempted (check your phone).")
         return
 
     run_once(dry_run=args.dry_run)

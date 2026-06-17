@@ -46,6 +46,15 @@ USER_AGENT = (
 
 HTTP_TIMEOUT = 30  # seconds
 
+# --- SMS (free, Free Mobile) -------------------------------------------------
+# Free Mobile's built-in "Notifications par SMS" API sends a free SMS to the
+# subscriber's OWN number. Every notification email is mirrored to SMS (text =
+# the email subject) when these are set; unset => SMS is a no-op (safe).
+#   user = Free Mobile identifiant, pass = generated API key (Mes Options).
+FREE_SMS_USER = os.environ.get("FREE_SMS_USER", "")
+FREE_SMS_PASS = os.environ.get("FREE_SMS_PASS", "")
+FREE_SMS_URL = "https://smsapi.free-mobile.fr/sendmsg"
+
 # --- Liveness / dead-man's-switch -------------------------------------------
 # Optional healthchecks.io (or compatible) ping URL. On every successful run the
 # watcher GETs this URL; if healthchecks.io receives no ping within its

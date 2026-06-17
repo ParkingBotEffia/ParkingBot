@@ -74,6 +74,16 @@ Body: {"ref":"main"}
 The `schedule:` block is kept as a harmless backup (the `concurrency` group prevents
 overlap). If the external trigger ever stops, the dead-man's-switch (above) emails you.
 
+## SMS (free, Free Mobile)
+
+Every notification email is **also sent as an SMS** to the owner's phone via Free Mobile's
+free notification API — centralised in `notify.send()` (SMS text = the email subject), so
+the spot alert, breakage alarm, recovered notice, weekly canary, and tests all buzz the
+phone. Secrets `FREE_SMS_USER` / `FREE_SMS_PASS`; best-effort (never breaks the email/run)
+and no-ops if unset. Verify with **Run workflow → test_sms**. The "bot is down"
+dead-man's-switch (sent by healthchecks.io, not the bot) can also SMS by adding a Free
+Mobile webhook URL as a healthchecks integration.
+
 ## Liveness (dead-man's-switch)
 
 A bot that stops running can't email you — and GitHub only emails on *failed* runs, never

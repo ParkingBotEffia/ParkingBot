@@ -11,15 +11,30 @@ Outlook/Hotmail accounts, which makes them unusable from an unattended script.
 
 from __future__ import annotations
 
+import logging
 import os
 import smtplib
 from email.message import EmailMessage
 from typing import List
 
+import requests
+
+from . import config
 from .parse import LotStatus
+
+log = logging.getLogger("parkingbot")
 
 SMTP_HOST = "smtp.gmail.com"
 SMTP_PORT = 465  # implicit TLS (SMTPS)
+
+# Free Mobile SMS API return codes (for clear logging).
+_SMS_CODES = {
+    200: "sent",
+    400: "missing parameter",
+    402: "rate-limited (too many SMS)",
+    403: "service disabled or bad credentials",
+    500: "Free Mobile server error",
+}
 
 
 class EmailConfigError(RuntimeError):
@@ -140,11 +155,43 @@ def build_test_email() -> EmailMessage:
     return msg
 
 
+def send_sms(text: str) -> None:
+    """Best-effort SMS to the user's own number via the free Free Mobile API.
+
+    No-ops if FREE_SMS_USER/PASS aren't both set. Never raises — an SMS failure
+    must never break the email or the run. Messages are capped at 160 chars to
+    stay a single SMS.
+    """
+    user, password = config.FREE_SMS_USER, config.FREE_SMS_PASS
+    if not (user and password):
+        return  # SMS not configured
+    try:
+        resp = requests.get(
+            config.FREE_SMS_URL,
+            params={"user": user, "pass": password, "msg": text[:160]},
+            timeout=10,
+        )
+        meaning = _SMS_CODES.get(resp.status_code, "unexpected response")
+        if resp.status_code == 200:
+            log.info("SMS sent.")
+        else:
+            log.warning("SMS not sent (HTTP %s: %s).", resp.status_code, meaning)
+    except Exception as exc:  # noqa: BLE001 - SMS must never break the run
+        log.warning("SMS send failed (ignored): %s", exc)
+
+
 def send(msg: EmailMessage) -> None:
-    """Send a prepared message via Gmail SMTP over implicit TLS."""
+    """Send a prepared message via Gmail SMTP, then mirror it to SMS.
+
+    The SMS text is the email's Subject line — short and descriptive — so every
+    notification (spot alert, breakage alarm, recovered, canary, tests) is
+    delivered as both email and SMS through this single path.
+    """
     user, password, recipient = _credentials()
     msg["From"] = user
     msg["To"] = recipient
     with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=30) as smtp:
         smtp.login(user, password)
         smtp.send_message(msg)
+    # Mirror to SMS (best-effort; no-op if SMS isn't configured).
+    send_sms(str(msg["Subject"]))
