@@ -16,6 +16,10 @@ on:
         description: "Run the full alert path on a captured 'available' page and email it"
         type: boolean
         default: false
+      health_test:
+        description: "Send a test of the 'bot is broken' breakage-alarm email"
+        type: boolean
+        default: false
 
 # Allow the job to push the updated state.json back to the repo.
 permissions:
@@ -58,8 +62,17 @@ jobs:
           PYTHONPATH: src
         run: python -m parkingbot.main --self-test
 
+      - name: Health-alarm test (manual only)
+        if: ${{ inputs.health_test }}
+        env:
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          NOTIFY_TO: ${{ secrets.NOTIFY_TO }}
+          PYTHONPATH: src
+        run: python -m parkingbot.main --health-test
+
       - name: Check availability
-        if: ${{ !inputs.test_email && !inputs.self_test }}
+        if: ${{ !inputs.test_email && !inputs.self_test && !inputs.health_test }}
         env:
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
@@ -68,7 +81,7 @@ jobs:
         run: python -m parkingbot.main --once
 
       - name: Persist state + daily heartbeat
-        if: ${{ !inputs.test_email && !inputs.self_test }}
+        if: ${{ !inputs.test_email && !inputs.self_test && !inputs.health_test }}
         run: |
           # The heartbeat is today's UTC date. It changes at most once per day, so
           # it produces one keep-alive commit daily — enough to stop GitHub from

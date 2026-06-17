@@ -56,7 +56,20 @@ ruff check .
 back. Required repo secrets: `GMAIL_USER`, `GMAIL_APP_PASSWORD`, `NOTIFY_TO`.
 Use the **Run workflow** button (with *test_email* checked) to send a test email.
 
-## Entry month
+## Self-monitoring (breakage alarm)
 
-v1 watches EFFIA's nearest bookable month (the default search URL). The `data-link`
-exposes `entry=`/`exit=` params, so sweeping additional months is a future option.
+If EFFIA changes their HTML and fewer than the 4 expected lots are recognised, the bot
+emails a one-off **"⚠️ ParkingBot est peut-être cassé"** warning (deduped via a
+`_degraded` flag in `state.json`) and a **"✅ refonctionne"** note when reading works
+again. A hard fetch/HTTP error instead fails the CI run (GitHub emails you about failed
+scheduled runs). Verify delivery anytime with **Run workflow → health_test**.
+
+## Entry month — why we only watch the nearest month
+
+Investigated and settled: EFFIA subscription availability is **capacity-based, not
+month-specific**. A lot either has a free subscription slot or not; you pick your start
+month at checkout. The server only renders that yes/no for the nearest month, and the
+`entry=` URL param does **not** make it recompute for another month (per-month UI is
+JavaScript-only). So a "free for a later month but not now" state does not meaningfully
+exist — a freed slot appears immediately on the page we already watch. Watching later
+months would need a headless browser and would find nothing extra, so we don't.

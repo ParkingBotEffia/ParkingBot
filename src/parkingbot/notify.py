@@ -70,6 +70,33 @@ def build_opening_email(newly_open: List[LotStatus]) -> EmailMessage:
     return msg
 
 
+def build_health_alert_email(found: int, expected: int) -> EmailMessage:
+    """Warn that ParkingBot may be broken (EFFIA HTML likely changed)."""
+    msg = EmailMessage()
+    msg["Subject"] = "⚠️ ParkingBot est peut-être cassé"
+    msg.set_content(
+        "ParkingBot n'a pas réussi à lire correctement la page EFFIA.\n\n"
+        f"Parkings reconnus : {found} sur {expected} attendus.\n\n"
+        "Cela arrive en général quand EFFIA modifie son site web. La surveillance ne "
+        "fonctionne donc peut-être plus — il faut vérifier/réparer le parser.\n\n"
+        "Tu ne recevras pas d'autre alerte de ce type tant que ce n'est pas résolu "
+        "(et un message de confirmation quand ça refonctionnera).\n\n"
+        "— ParkingBot"
+    )
+    return msg
+
+
+def build_recovered_email() -> EmailMessage:
+    """Confirm ParkingBot can read EFFIA again after a degraded period."""
+    msg = EmailMessage()
+    msg["Subject"] = "✅ ParkingBot refonctionne"
+    msg.set_content(
+        "Bonne nouvelle : ParkingBot relit de nouveau correctement la page EFFIA. "
+        "La surveillance des places d'abonnement est réactivée.\n\n— ParkingBot"
+    )
+    return msg
+
+
 def build_test_email() -> EmailMessage:
     """A simple message to confirm SMTP credentials/wiring work end to end."""
     msg = EmailMessage()

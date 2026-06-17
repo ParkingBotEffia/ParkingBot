@@ -11,6 +11,7 @@ CLI:
     python -m parkingbot.main --self-test    # run the REAL alert path on a captured
                                              # "P4 available" page and email it (proves
                                              # detection -> opening email -> SMTP)
+    python -m parkingbot.main --health-test  # send a real (marked) breakage-alarm email
 """
 
 from __future__ import annotations
@@ -58,11 +59,41 @@ def next_state(lots: List[LotStatus]) -> Dict[str, bool]:
     return {lot.code: lot.available for lot in lots}
 
 
+DEGRADED_KEY = "_degraded"  # state flag: are we currently failing to read EFFIA?
+
+
 def run_once(dry_run: bool = False) -> int:
-    """Perform a single check. Returns the number of lots newly opened."""
+    """Perform a single check. Returns the number of lots newly opened.
+
+    Health guard: if we recognise fewer than all expected lots, EFFIA has likely
+    changed their HTML and detection may be silently broken. We email a one-off
+    warning (deduped via the ``_degraded`` state flag) and a "recovered" note when
+    reading works again — so a breakage pings Léo instead of failing silently.
+    (A hard fetch/HTTP error instead raises, turning the CI run red — GitHub emails
+    you about your own failed scheduled runs.)
+    """
     html = fetch.fetch_search_html()
     lots = parse_lots(html)
     previous = state.load_state()
+    was_degraded = previous.get(DEGRADED_KEY, False)
+
+    expected = len(config.LOTS)
+    if len(lots) < expected:
+        log.warning("DEGRADED: recognised %d of %d lots — EFFIA structure may have "
+                    "changed; detection may be broken.", len(lots), expected)
+        if dry_run:
+            log.info("[dry-run] would send a health alert; doing nothing.")
+            return 0
+        if not was_degraded:
+            notify.send(notify.build_health_alert_email(len(lots), expected))
+            log.info("Health-alert email sent to %s.", os.environ.get("NOTIFY_TO", "<unset>"))
+        else:
+            log.info("Still degraded; alert already sent — staying silent.")
+        # Preserve the previous per-lot memory; only flip the degraded flag.
+        carried = dict(previous)
+        carried[DEGRADED_KEY] = True
+        state.save_state(carried)
+        return 0
 
     summary = ", ".join(f"{lot.code}={'1' if lot.available else '0'}" for lot in lots)
     log.info("Parsed %d lots [%s]; %d available.",
@@ -82,9 +113,23 @@ def run_once(dry_run: bool = False) -> int:
         log.info("No new openings. No email.")
 
     if not dry_run:
-        state.save_state(next_state(lots))
+        if was_degraded:
+            notify.send(notify.build_recovered_email())
+            log.info("Recovered: reading EFFIA works again; recovery email sent.")
+        new_state = next_state(lots)
+        new_state[DEGRADED_KEY] = False
+        state.save_state(new_state)
 
     return len(newly_open)
+
+
+def run_health_test() -> None:
+    """Send a real (clearly-marked) health-alert email to prove the breakage alarm
+    actually reaches your inbox. Does not touch state.json."""
+    msg = notify.build_health_alert_email(0, len(config.LOTS))
+    msg.replace_header("Subject", "[TEST] " + msg["Subject"])
+    notify.send(msg)
+    log.info("Health-test email sent to %s.", os.environ.get("NOTIFY_TO", "<unset>"))
 
 
 def run_self_test() -> None:
@@ -131,6 +176,8 @@ def main() -> None:
     parser.add_argument("--self-test", action="store_true",
                         help="run the full alert path on a captured 'available' page "
                              "and email it, then exit")
+    parser.add_argument("--health-test", action="store_true",
+                        help="send a real (marked) breakage-alarm email, then exit")
     args = parser.parse_args()
 
     if args.test_email:
@@ -140,6 +187,10 @@ def main() -> None:
 
     if args.self_test:
         run_self_test()
+        return
+
+    if args.health_test:
+        run_health_test()
         return
 
     run_once(dry_run=args.dry_run)
