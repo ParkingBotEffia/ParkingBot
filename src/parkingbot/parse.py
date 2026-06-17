@@ -32,43 +32,60 @@ class LotStatus:
     url: str             # the lot's parking page (from data-link, query stripped)
 
 
-def _lot_for_slug(slug_or_link: str) -> Optional[tuple]:
+def _lot_for_slug(slug_or_link: str, lots) -> Optional[tuple]:
     """Return the matching (code, slug, label) tuple for a data-link, or None."""
-    for entry in config.LOTS:
+    for entry in lots:
         _code, slug_token, _label = entry
         if slug_token in slug_or_link:
             return entry
     return None
 
 
-def parse_lots(html: str) -> List[LotStatus]:
-    """Extract availability for every monitored lot found in the page.
+def parse_lots(html: str, lots=None) -> List[LotStatus]:
+    """Extract subscription availability for every monitored lot in the page.
 
-    Only lots listed in ``config.LOTS`` are returned (the search page may also
-    contain unrelated nearby parkings). Each is returned once; order follows the
-    page's DOM order — callers sort by preference when it matters.
+    ``lots`` is a list of (code, slug-token, label) tuples and defaults to
+    ``config.LOTS`` (Bellegarde); the canary passes ``config.CANARY_LOTS``.
+
+    IMPORTANT — EFFIA renders up to TWO ``<li class="result-item">`` cards per
+    parking: a ``orderType=default`` (hourly) card, and — ONLY when a subscription
+    spot is free — an extra ``orderType=subscription`` card with
+    ``data-available="1"``. The subscription signal is therefore *a subscription
+    card that is available*; the default card's ``data-available`` is about hourly
+    parking and must NOT be treated as a subscription opening. We aggregate all
+    cards matching a lot and mark it available iff one such subscription card is
+    available. Returned in ``lots`` order; each lot at most once.
     """
+    if lots is None:
+        lots = config.LOTS
     soup = BeautifulSoup(html, "html.parser")
-    results: List[LotStatus] = []
-    seen = set()
 
+    # code -> {"available": bool, "url": str}
+    found = {}
     for li in soup.select("li.result-item"):
         link = li.get("data-link", "") or ""
-        entry = _lot_for_slug(link)
+        entry = _lot_for_slug(link, lots)
         if entry is None:
             continue  # a parking we don't monitor
-        code, _slug, label = entry
-        if code in seen:
-            continue  # guard against accidental duplicates
-        seen.add(code)
-
+        code, _slug, _label = entry
+        is_subscription = "orderType=subscription" in link
         available = (li.get("data-available", "0") or "0").strip() == "1"
-        # Strip the query string so the URL is a clean, shareable parking page.
         clean_url = link.split("?", 1)[0] if link else ""
-        results.append(
-            LotStatus(code=code, label=label, available=available, url=clean_url)
-        )
 
+        rec = found.setdefault(code, {"available": False, "url": ""})
+        # Subscription availability = an available subscription card exists.
+        if is_subscription and available:
+            rec["available"] = True
+        # Prefer the subscription card's URL; otherwise keep the first seen.
+        if is_subscription or not rec["url"]:
+            rec["url"] = clean_url
+
+    results: List[LotStatus] = []
+    for code, _slug, label in lots:
+        if code in found:
+            results.append(LotStatus(code=code, label=label,
+                                     available=found[code]["available"],
+                                     url=found[code]["url"]))
     return results
 
 

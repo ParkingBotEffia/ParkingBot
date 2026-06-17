@@ -46,6 +46,28 @@ USER_AGENT = (
 
 HTTP_TIMEOUT = 30  # seconds
 
+# --- Canary / weekly system-test --------------------------------------------
+# A parking that reliably HAS subscription availability, used once a week to
+# prove the whole chain (fetch -> parse -> detect -> email) still works without
+# sending false "spot available" alerts. Marseille currently shows 5 free lots.
+# The canary runs the SAME fetch/parse/detect code as Bellegarde, only the URL
+# and lot list differ — so a passing Marseille test proves Bellegarde detection
+# works too. "Detected" = at least one of these lots is available, so it won't
+# false-alarm unless they all fill simultaneously (very unlikely).
+CANARY_STATION = "Marseille"
+CANARY_URL = os.environ.get(
+    "EFFIA_CANARY_URL",
+    "https://www.effia.com/search"
+    "?lat=43.3026&lng=5.36907&q=marseille&orderType=subscription",
+)
+CANARY_LOTS = [
+    ("GAMBETTA", "-gambetta-effia", "Marseille Gambetta"),
+    ("CORDERIE", "-corderie-effia", "Marseille Corderie"),
+    ("ST-CHARLES-P3", "-marseille-saint-charles-p3-effia", "Marseille Saint-Charles P3"),
+    ("COURS-JULIEN", "-cours-julien-effia", "Marseille Cours Julien"),
+    ("BARET", "-baret-effia", "Marseille Baret"),
+]
+
 # --- State file --------------------------------------------------------------
 # Tiny JSON remembering each lot's last-seen availability, so we email only on a
 # 0->1 transition and never re-spam while a spot stays open. In CI this file is

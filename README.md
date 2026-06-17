@@ -9,12 +9,14 @@ Preference order when several lots open at once: **P4 > P2 > P3 > P1**.
 
 ## How it works
 
-The EFFIA search page in subscription mode server-renders each lot as
-`<li class="result-item" data-available="0|1" data-link=".../parking/...-p4-...">`.
-`data-available="1"` means a spot is free. We GET that page, parse the four cards
-with BeautifulSoup, and email only when a lot flips `0 → 1` (so no spam while it
-stays open; re-notifies if it closes then reopens). Last-seen state is kept in
-`state.json`, committed back to the repo between scheduled runs.
+The EFFIA search page renders each lot as `<li class="result-item">` cards. The
+**subscription** signal is specific: EFFIA shows a `orderType=default` (hourly) card
+always, and adds a SECOND `orderType=subscription` card with `data-available="1"` ONLY
+when a subscription spot is free. So `parse.py` marks a lot available iff an
+*`orderType=subscription`* card is available — the default card's `data-available` is
+about hourly parking and is ignored. We GET that page, parse with BeautifulSoup, and email
+only when a lot flips `0 → 1` (no spam while open; re-notifies on close→reopen). Last-seen
+state is kept in `state.json`, committed back between scheduled runs.
 
 ```
 src/parkingbot/
@@ -55,6 +57,16 @@ ruff check .
 `.github/workflows/watch.yml` runs `--once` on `cron: */5` and commits `state.json`
 back. Required repo secrets: `GMAIL_USER`, `GMAIL_APP_PASSWORD`, `NOTIFY_TO`.
 Use the **Run workflow** button (with *test_email* checked) to send a test email.
+
+## Weekly system-test (canary)
+
+`.github/workflows/canary.yml` runs every **Sunday 18:00 UTC** (and on demand). It runs
+the **same** detection code against Marseille (which reliably has spots) and emails
+**"✅ ParkingBot — test système OK"** when detection fires — proving the whole chain works
+end-to-end, without any false "spot available" alert. If Marseille ever shows 0, it emails
+a **"test système : anomalie"** instead. Fully separate from `watch.yml`: own workflow, own
+config (`CANARY_*` in `config.py`), writes no state. Because it exercises the identical
+`fetch`/`parse_lots`/`available_count` path, a passing test proves Bellegarde works too.
 
 ## Self-monitoring (breakage alarm)
 

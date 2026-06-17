@@ -12,6 +12,7 @@ CLI:
                                              # "P4 available" page and email it (proves
                                              # detection -> opening email -> SMTP)
     python -m parkingbot.main --health-test  # send a real (marked) breakage-alarm email
+    python -m parkingbot.main --canary       # weekly end-to-end self-check (Marseille)
 """
 
 from __future__ import annotations
@@ -123,6 +124,22 @@ def run_once(dry_run: bool = False) -> int:
     return len(newly_open)
 
 
+def run_canary() -> None:
+    """Weekly end-to-end self-check against an always-available parking (Marseille).
+
+    Runs the EXACT same code path as Bellegarde — fetch_search_html -> parse_lots ->
+    available_count — only the URL and lot list differ. Sends a clearly-labelled
+    "test système" email (never a false spot alert). Touches no state.
+    """
+    html = fetch.fetch_search_html(config.CANARY_URL)
+    lots = parse_lots(html, config.CANARY_LOTS)
+    n = available_count(lots)
+    log.info("Canary: %s detected %d/%d configured lots available.",
+             config.CANARY_STATION, n, len(config.CANARY_LOTS))
+    notify.send(notify.build_systemtest_email(detected=n >= 1, station=config.CANARY_STATION, n=n))
+    log.info("System-test email sent to %s.", os.environ.get("NOTIFY_TO", "<unset>"))
+
+
 def run_health_test() -> None:
     """Send a real (clearly-marked) health-alert email to prove the breakage alarm
     actually reaches your inbox. Does not touch state.json."""
@@ -178,6 +195,8 @@ def main() -> None:
                              "and email it, then exit")
     parser.add_argument("--health-test", action="store_true",
                         help="send a real (marked) breakage-alarm email, then exit")
+    parser.add_argument("--canary", action="store_true",
+                        help="weekly end-to-end self-check against Marseille, then exit")
     args = parser.parse_args()
 
     if args.test_email:
@@ -191,6 +210,10 @@ def main() -> None:
 
     if args.health_test:
         run_health_test()
+        return
+
+    if args.canary:
+        run_canary()
         return
 
     run_once(dry_run=args.dry_run)

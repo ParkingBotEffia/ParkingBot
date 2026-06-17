@@ -97,6 +97,38 @@ def build_recovered_email() -> EmailMessage:
     return msg
 
 
+def build_systemtest_email(detected: bool, station: str, n: int) -> EmailMessage:
+    """Weekly end-to-end self-check email (clearly NOT a real spot alert).
+
+    Runs the same detection code as Bellegarde against a parking that should have
+    availability. If detection fires (``detected``), the chain works; otherwise the
+    test parking unexpectedly shows 0 and we flag it.
+    """
+    msg = EmailMessage()
+    if detected:
+        msg["Subject"] = "✅ ParkingBot — test système OK"
+        msg.set_content(
+            "Test hebdomadaire automatique.\n\n"
+            f"ParkingBot a vérifié toute la chaîne (lecture EFFIA + détection + email) "
+            f"en testant {station}, où il a bien détecté {n} place(s) d'abonnement.\n\n"
+            "=> Tout fonctionne. La surveillance de Bellegarde est opérationnelle.\n\n"
+            "⚠️ Ceci n'est PAS une place à Bellegarde — aucune action requise.\n\n"
+            "— ParkingBot"
+        )
+    else:
+        msg["Subject"] = "⚠️ ParkingBot — test système : anomalie"
+        msg.set_content(
+            "Test hebdomadaire automatique.\n\n"
+            f"ParkingBot n'a détecté AUCUNE place sur le parking de test ({station}), "
+            "alors qu'il devrait y en avoir.\n\n"
+            "Deux possibilités : soit ce parking s'est rempli, soit la détection est "
+            "cassée (EFFIA a peut-être changé son site). À vérifier.\n\n"
+            "(Le fait que tu reçoives cet email prouve au moins que l'envoi fonctionne.)\n\n"
+            "— ParkingBot"
+        )
+    return msg
+
+
 def build_test_email() -> EmailMessage:
     """A simple message to confirm SMTP credentials/wiring work end to end."""
     msg = EmailMessage()
