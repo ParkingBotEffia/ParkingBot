@@ -4,10 +4,12 @@ name: canary-systemtest
 # (watch.yml). Runs the SAME detection code against Marseille (which reliably has
 # subscription availability) and emails a clearly-labelled "test système OK" — never
 # a false spot alert. Writes nothing; shares only the read-only email secrets.
+#
+# Triggered weekly (Sunday 18:00 UTC) by an EXTERNAL cron-job.org job hitting the
+# workflow_dispatch API — NOT GitHub's native `schedule:` cron, which proved
+# unreliable (it fired this canary ~4.5h late). Same reliable trigger as watch.yml.
 on:
-  schedule:
-    - cron: "0 18 * * 0"   # every Sunday 18:00 UTC
-  workflow_dispatch:        # on-demand one-shot
+  workflow_dispatch:        # fired by cron-job.org weekly + usable for on-demand runs
 
 permissions:
   contents: read
