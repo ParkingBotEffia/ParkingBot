@@ -235,7 +235,11 @@ def main() -> None:
         return
 
     if args.canary:
-        run_canary()
+        try:
+            run_canary()
+        except fetch.EffiaUnavailable as exc:
+            # EFFIA down at canary time — skip cleanly (no GitHub failure email).
+            log.warning("Canary skipped: %s", exc)
         return
 
     if args.test_sms:
@@ -243,7 +247,14 @@ def main() -> None:
         log.info("Test SMS attempted (check your phone).")
         return
 
-    run_once(dry_run=args.dry_run)
+    try:
+        run_once(dry_run=args.dry_run)
+    except fetch.EffiaUnavailable as exc:
+        # Transient EFFIA outage: skip this cycle WITHOUT failing the run (so GitHub
+        # sends no "run failed" email) and WITHOUT pinging (so healthchecks reports
+        # exactly one "down", then "up" on recovery). Any other error still raises.
+        log.warning("Skipping cycle — EFFIA unreachable (their site): %s", exc)
+        return
     # Liveness ping only on a real (non-dry-run) check that completed without raising.
     if not args.dry_run:
         ping_liveness()
