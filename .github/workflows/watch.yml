@@ -1,11 +1,15 @@
 name: watch-effia-valserhone
 
-# Runs the watcher on a schedule (every ~5 min) and on manual trigger.
-# GitHub's cron has a 5-min minimum and may be delayed a few minutes under load;
-# that is fine for this use case.
+# Dispatched every 30 min by an EXTERNAL cron-job.org job (see README "Trigger").
+# Each run then checks every 5 min for 28 min and exits, so detection stays at a
+# 5-min cadence on ~48 runs/day instead of 288.
+#
+# There is deliberately NO `schedule:` cron here. It was a second trigger firing
+# into the same `concurrency` group as the external dispatcher, and when GitHub
+# can't hand out a runner the queued runs fail (15-min timeout) or get evicted —
+# which is what produced the 2026-08-06 email flood. cron-job.org is the single
+# trigger; if it ever dies, the healthchecks.io dead-man's-switch says so.
 on:
-  schedule:
-    - cron: "*/5 * * * *"
   workflow_dispatch:
     inputs:
       test_email:
@@ -37,6 +41,10 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
+    # A run is now long-lived (~29 min). Cap it just above that so a wedged run
+    # can't hold the concurrency group for the 6-hour default and block every
+    # subsequent dispatch.
+    timeout-minutes: 32
     steps:
       - uses: actions/checkout@v4
 
@@ -99,14 +107,15 @@ jobs:
           FREE_SMS_USER: ${{ secrets.FREE_SMS_USER }}
           FREE_SMS_PASS: ${{ secrets.FREE_SMS_PASS }}
           PYTHONPATH: src
-        run: python -m parkingbot.main --once
+        run: python -m parkingbot.main --loop --duration 1680
 
       - name: Persist state + daily heartbeat
         if: ${{ !inputs.test_email && !inputs.self_test && !inputs.health_test && !inputs.test_sms }}
         run: |
-          # The heartbeat is today's UTC date. It changes at most once per day, so
-          # it produces one keep-alive commit daily — enough to stop GitHub from
-          # auto-disabling the schedule after 60 days of no repository activity.
+          # The heartbeat is today's UTC date, so this is at most one commit a day.
+          # It no longer guards against GitHub's 60-day auto-disable (that only hits
+          # `schedule:` workflows, and this one is dispatch-only now); it's kept as a
+          # cheap daily "the bot was alive" marker in the git history.
           date -u +%Y-%m-%d > heartbeat.txt
           if [[ -n "$(git status --porcelain state.json heartbeat.txt)" ]]; then
             git config user.name "ParkingBotEffia"

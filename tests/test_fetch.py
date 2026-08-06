@@ -1,4 +1,4 @@
-"""Fetch retries + graceful EFFIA-outage handling (no crash, no ping)."""
+"""Fetch retries + graceful EFFIA-outage handling (no crash, still pings)."""
 
 import os
 import sys
@@ -48,16 +48,18 @@ def _raise_unavailable(*a, **k):
     raise fetch.EffiaUnavailable("EFFIA down")
 
 
-def test_main_skips_cleanly_and_does_not_ping_on_outage(monkeypatch, tmp_path):
+def test_main_skips_cleanly_and_still_pings_on_outage(monkeypatch, tmp_path):
     # An EFFIA outage must NOT crash main() (so GitHub sends no failure email)
-    # and must NOT ping (so healthchecks reports a single down/up).
+    # and must STILL ping: the bot ran and behaved correctly, so withholding the
+    # ping would report *us* as dead for *their* outage. A sustained outage is
+    # reported by the _effia_down alarm instead.
     monkeypatch.setattr(config, "STATE_PATH", str(tmp_path / "state.json"))
     monkeypatch.setattr(sys, "argv", ["parkingbot", "--once"])
     monkeypatch.setattr(fetch, "fetch_search_html", _raise_unavailable)
     pinged = []
     monkeypatch.setattr(main, "ping_liveness", lambda: pinged.append(1))
     main.main()  # must return normally (exit 0)
-    assert pinged == []
+    assert pinged == [1]
 
 
 def test_main_pings_on_healthy_run(monkeypatch, tmp_path):

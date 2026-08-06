@@ -6,6 +6,8 @@ Flow: fetch -> parse -> diff against saved state -> email lots that went 0->1
 CLI:
     python -m parkingbot.main            # one check (default)
     python -m parkingbot.main --once     # explicit single check
+    python -m parkingbot.main --loop     # check every 5 min for 28 min, then exit
+                                         # (what CI runs — see run_loop)
     python -m parkingbot.main --dry-run  # check + log, but never send email/save
     python -m parkingbot.main --test-email   # send one test email and exit
     python -m parkingbot.main --self-test    # run the REAL alert path on a captured
@@ -21,6 +23,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import time
 from typing import Dict, List
 
 import requests
@@ -63,6 +66,7 @@ def next_state(lots: List[LotStatus]) -> Dict[str, bool]:
 
 
 DEGRADED_KEY = "_degraded"  # state flag: are we currently failing to read EFFIA?
+EFFIA_DOWN_KEY = "_effia_down"  # state flag: is EFFIA's site itself unreachable?
 
 
 def run_once(dry_run: bool = False) -> int:
@@ -121,6 +125,9 @@ def run_once(dry_run: bool = False) -> int:
             log.info("Recovered: reading EFFIA works again; recovery email sent.")
         new_state = next_state(lots)
         new_state[DEGRADED_KEY] = False
+        # next_state() rebuilds the map from the parsed lots, so any non-lot flag
+        # would be dropped here. _effia_down is owned by the loop, not by us.
+        new_state[EFFIA_DOWN_KEY] = previous.get(EFFIA_DOWN_KEY, False)
         state.save_state(new_state)
 
     return len(newly_open)
@@ -132,7 +139,11 @@ def ping_liveness() -> None:
     GETs config.HEALTHCHECK_URL so healthchecks.io knows the watcher ran. If the
     URL is unset it no-ops; any network error is swallowed — the ping must NEVER
     affect the run's outcome. A *missing* ping (because the scheduler didn't fire,
-    or EFFIA was unreachable) is what triggers healthchecks.io's external alert.
+    or the check itself crashed) is what triggers healthchecks.io's external alert.
+
+    Note we DO ping when EFFIA is unreachable: the bot ran and behaved correctly,
+    so staying silent would report *us* as dead for *their* outage. A sustained
+    EFFIA outage is reported separately by the _effia_down alarm.
     """
     url = config.HEALTHCHECK_URL
     if not url:
@@ -142,6 +153,88 @@ def ping_liveness() -> None:
         log.info("Liveness ping sent.")
     except Exception as exc:  # noqa: BLE001 - never let the ping break the run
         log.warning("Liveness ping failed (ignored): %s", exc)
+
+
+def _flag_effia_down(consecutive: int, dry_run: bool = False) -> None:
+    """Email once when EFFIA has been unreachable long enough to be a real outage.
+
+    Deduped across runs via the ``_effia_down`` state flag, exactly like
+    ``_degraded`` — a multi-hour EFFIA outage must cost one email, not one per
+    check. Below the threshold we stay silent: short blips are already absorbed
+    by fetch's retries and aren't worth a notification.
+    """
+    if dry_run or consecutive < config.EFFIA_DOWN_THRESHOLD:
+        return
+    current = state.load_state()
+    if current.get(EFFIA_DOWN_KEY, False):
+        return  # already reported; stay quiet until it recovers
+    notify.send(notify.build_effia_down_email(consecutive))
+    current[EFFIA_DOWN_KEY] = True
+    state.save_state(current)
+    log.info("EFFIA-outage email sent to %s.", os.environ.get("NOTIFY_TO", "<unset>"))
+
+
+def _clear_effia_down(dry_run: bool = False) -> None:
+    """Confirm EFFIA is reachable again — but only if we said it wasn't."""
+    if dry_run:
+        return
+    current = state.load_state()
+    if not current.get(EFFIA_DOWN_KEY, False):
+        return
+    notify.send(notify.build_effia_recovered_email())
+    current[EFFIA_DOWN_KEY] = False
+    state.save_state(current)
+    log.info("EFFIA reachable again; recovery email sent.")
+
+
+def run_loop(duration: int, interval: int, dry_run: bool = False) -> None:
+    """Check every ``interval`` seconds for ``duration`` seconds, then exit.
+
+    Batching many checks into one long-lived CI run is what keeps GitHub from
+    emailing about this bot: a run per check meant ~288 runner acquisitions a
+    day, and when GitHub can't hand out a runner the run fails without executing
+    a single step — nothing inside the workflow can catch that. Six checks per
+    run cuts the exposure ~6x while keeping the 5-min detection cadence.
+
+    Nothing here may raise. Ending the run early would leave us blind until the
+    next dispatch, so a failing check is logged and skipped; it simply doesn't
+    ping, and healthchecks.io raises the alarm if that persists.
+    """
+    started = time.monotonic()
+    deadline = started + duration
+    next_check = started
+    consecutive_outages = 0
+    checks = 0
+
+    while True:
+        checks += 1
+        log.info("Check %d (t+%ds of %ds).", checks,
+                 int(time.monotonic() - started), duration)
+
+        pingable = True
+        try:
+            run_once(dry_run=dry_run)
+        except fetch.EffiaUnavailable as exc:
+            # Their site, not ours: still a healthy run (see ping_liveness).
+            consecutive_outages += 1
+            log.warning("EFFIA unreachable (%d in a row): %s", consecutive_outages, exc)
+            _flag_effia_down(consecutive_outages, dry_run=dry_run)
+        except Exception:  # noqa: BLE001 - one bad check must not end the run
+            pingable = False
+            log.exception("Check failed; skipping this check's ping and continuing.")
+        else:
+            consecutive_outages = 0
+            _clear_effia_down(dry_run=dry_run)
+
+        if pingable and not dry_run:
+            ping_liveness()
+
+        next_check += interval
+        if next_check >= deadline:
+            log.info("Loop done: %d checks in %ds; exiting before the next dispatch.",
+                     checks, int(time.monotonic() - started))
+            return
+        time.sleep(max(0.0, next_check - time.monotonic()))
 
 
 def run_canary() -> None:
@@ -206,6 +299,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="EFFIA Valserhône spot watcher")
     parser.add_argument("--once", action="store_true",
                         help="run a single check (this is also the default)")
+    parser.add_argument("--loop", action="store_true",
+                        help="keep checking every 5 min until --duration elapses, "
+                             "then exit (what CI runs)")
+    parser.add_argument("--duration", type=int, default=config.LOOP_DURATION,
+                        help="seconds --loop keeps checking "
+                             f"(default {config.LOOP_DURATION})")
     parser.add_argument("--dry-run", action="store_true",
                         help="check and log, but never send email or write state")
     parser.add_argument("--test-email", action="store_true",
@@ -247,15 +346,18 @@ def main() -> None:
         log.info("Test SMS attempted (check your phone).")
         return
 
+    if args.loop:
+        run_loop(args.duration, config.LOOP_INTERVAL, dry_run=args.dry_run)
+        return
+
     try:
         run_once(dry_run=args.dry_run)
     except fetch.EffiaUnavailable as exc:
-        # Transient EFFIA outage: skip this cycle WITHOUT failing the run (so GitHub
-        # sends no "run failed" email) and WITHOUT pinging (so healthchecks reports
-        # exactly one "down", then "up" on recovery). Any other error still raises.
+        # Transient EFFIA outage: skip this cycle without failing the run. We still
+        # ping below — the bot ran correctly, and starving healthchecks here would
+        # report *us* as down for *their* outage. Any other error still raises.
         log.warning("Skipping cycle — EFFIA unreachable (their site): %s", exc)
-        return
-    # Liveness ping only on a real (non-dry-run) check that completed without raising.
+    # Liveness ping only on a real (non-dry-run) check.
     if not args.dry_run:
         ping_liveness()
 

@@ -42,6 +42,8 @@ cp .env.example .env          # fill in GMAIL_* and NOTIFY_TO
 ```bash
 PYTHONPATH=src python -m parkingbot.main --dry-run     # check + log, no email/state
 PYTHONPATH=src python -m parkingbot.main --once        # real check
+PYTHONPATH=src python -m parkingbot.main --loop        # what CI runs: check every
+                                                       # 5 min for 28 min, then exit
 PYTHONPATH=src python -m parkingbot.main --test-email  # verify SMTP wiring
 ```
 
@@ -54,15 +56,15 @@ ruff check .
 
 ## Deployment (GitHub Actions)
 
-`.github/workflows/watch.yml` runs `--once` and commits `state.json` back. Required repo
-secrets: `GMAIL_USER`, `GMAIL_APP_PASSWORD`, `NOTIFY_TO`, `HEALTHCHECK_URL`.
+`.github/workflows/watch.yml` runs `--loop --duration 1680` and commits `state.json` back.
+Required repo secrets: `GMAIL_USER`, `GMAIL_APP_PASSWORD`, `NOTIFY_TO`, `HEALTHCHECK_URL`.
 Use the **Run workflow** button (with *test_email* checked) to send a test email.
 
 ### Trigger
 
 GitHub's built-in `schedule:` cron proved unreliable for this repo (it ran 0 times in
 hours). The **real trigger is external**: a free [cron-job.org](https://cron-job.org) job
-calls the GitHub API every 5 minutes to dispatch `watch.yml`:
+calls the GitHub API **every 30 minutes** to dispatch `watch.yml`:
 
 ```
 POST https://api.github.com/repos/ParkingBotEffia/ParkingBot/actions/workflows/watch.yml/dispatches
@@ -71,8 +73,28 @@ Accept: application/vnd.github+json
 Body: {"ref":"main"}
 ```
 
-The `schedule:` block is kept as a harmless backup (the `concurrency` group prevents
-overlap). If the external trigger ever stops, the dead-man's-switch (above) emails you.
+Each run then checks **every 5 minutes for 28 minutes** and exits (`--loop`), so detection
+stays on a 5-min cadence while GitHub is asked for a runner only ~48 times a day instead
+of 288. That ratio is the point: on 2026-08-06 a GitHub hosted-runner capacity incident
+could not assign runners for ~6 h, and because every check was its own run it produced
+**24 "Run failed" emails in a day** — from jobs that never executed a single step, so
+nothing inside the workflow could have caught them. Fewer, longer runs shrink that
+exposure ~6x; the rest is handled by turning off Actions email (see below).
+
+There is deliberately **no `schedule:` block** any more: it was a second trigger firing
+into the same `concurrency` group as cron-job.org, so during that incident its runs piled
+up and were cancelled or failed. cron-job.org is the single trigger; if it ever stops, the
+dead-man's-switch below emails you.
+
+### Notifications
+
+GitHub Actions failure emails are **turned off** for the ParkingBotEffia account
+(Settings → Notifications → Actions → Email unchecked; Web left on). They cannot be
+suppressed from inside a workflow — a run that fails because no runner was available
+never executes a step, so `continue-on-error`/`timeout-minutes` don't apply. Nothing is
+lost: healthchecks.io catches a dead bot and the breakage alarm catches a broken parser,
+which between them cover every real failure. **healthchecks.io is now the only alerting
+channel**, so `--loop` deliberately never dies on an exception — it just stops pinging.
 
 ## SMS (free, Free Mobile)
 
@@ -86,12 +108,22 @@ Mobile webhook URL as a healthchecks integration.
 
 ## Liveness (dead-man's-switch)
 
-A bot that stops running can't email you — and GitHub only emails on *failed* runs, never
-*missing* ones. So on every successful run the watcher pings an external
+A bot that stops running can't email you — and GitHub never emails about *missing* runs.
+So after **every check** the watcher pings an external
 [healthchecks.io](https://healthchecks.io) check (`HEALTHCHECK_URL` secret, best-effort —
-never breaks a run). If healthchecks.io gets no ping within ~45 min (period 5 min + grace
-40 min), **it** emails you that ParkingBot is down. Being external, it catches even a total
-GitHub-scheduler outage. Unset secret ⇒ the ping no-ops.
+never breaks a run). If healthchecks.io gets no ping within ~3 h (period 5 min + grace
+3 h), **it** emails you that ParkingBot is down. Being external, it catches even a total
+GitHub outage. Unset secret ⇒ the ping no-ops.
+
+The 3 h grace is deliberate. It was 40 min, and GitHub runner-capacity incidents routinely
+stall dispatches for longer than that — 2026-08-06 saw gaps of 110, 80 and 65 min, each of
+which fired a false "ParkingBot is DOWN" email *and* SMS for a bot that was perfectly
+healthy. 3 h absorbs those while still reporting a genuinely dead bot the same morning.
+
+Two things deliberately do **not** withhold the ping, because neither means ParkingBot is
+broken: **EFFIA being unreachable** (their outage, not ours — reported separately, below)
+and any single failed check inside a `--loop` run (logged and skipped). What does stop the
+pings is the bot being genuinely dead or wedged — which is exactly what this detects.
 
 ## Weekly system-test (canary)
 
@@ -105,11 +137,17 @@ config (`CANARY_*` in `config.py`), writes no state. Because it exercises the id
 
 ## Self-monitoring (breakage alarm)
 
-If EFFIA changes their HTML and fewer than the 4 expected lots are recognised, the bot
-emails a one-off **"⚠️ ParkingBot est peut-être cassé"** warning (deduped via a
-`_degraded` flag in `state.json`) and a **"✅ refonctionne"** note when reading works
-again. A hard fetch/HTTP error instead fails the CI run (GitHub emails you about failed
-scheduled runs). Verify delivery anytime with **Run workflow → health_test**.
+Two distinct failures, two distinct alarms — both one-off, both deduped by a flag in
+`state.json`, both with a matching "recovered" note:
+
+| What broke | Symptom | Email | Flag |
+|---|---|---|---|
+| **We can't read EFFIA** — they changed their HTML, our parser is stale | page loads, fewer than the 4 expected lots recognised | ⚠️ ParkingBot est peut-être cassé | `_degraded` |
+| **EFFIA is down** — their site, nothing to fix here | page doesn't load at all, for 12 checks in a row (~1 h) | ⚠️ Site EFFIA injoignable | `_effia_down` |
+
+A short EFFIA blip is absorbed silently by `fetch.py`'s retries and never emails. Neither
+case fails the CI run, and neither withholds the healthchecks ping — the bot is running
+correctly in both. Verify delivery anytime with **Run workflow → health_test**.
 
 ## Entry month — why we only watch the nearest month
 

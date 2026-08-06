@@ -112,6 +112,40 @@ def build_recovered_email() -> EmailMessage:
     return msg
 
 
+def build_effia_down_email(consecutive: int) -> EmailMessage:
+    """Report a sustained EFFIA outage — their site, not ParkingBot.
+
+    Distinct from the breakage alarm: there the page loads but we can't read it
+    (our parser is likely stale); here the page doesn't load at all. Sent once
+    per outage, not once per check.
+    """
+    msg = EmailMessage()
+    msg["Subject"] = "⚠️ Site EFFIA injoignable"
+    msg.set_content(
+        "ParkingBot fonctionne normalement, mais le site EFFIA ne répond plus.\n\n"
+        f"Échecs consécutifs : {consecutive} (soit environ "
+        f"{consecutive * config.LOOP_INTERVAL // 60} minutes).\n\n"
+        "La surveillance continue et reprendra toute seule dès qu'EFFIA sera de "
+        "nouveau accessible. Il n'y a rien à faire — ce message signale juste que "
+        "les places ne sont pas vérifiables pour l'instant.\n\n"
+        "Tu ne recevras pas d'autre alerte de ce type tant que ça dure (et un "
+        "message de confirmation au retour).\n\n"
+        "— ParkingBot"
+    )
+    return msg
+
+
+def build_effia_recovered_email() -> EmailMessage:
+    """Confirm EFFIA is reachable again after a sustained outage."""
+    msg = EmailMessage()
+    msg["Subject"] = "✅ Site EFFIA de nouveau accessible"
+    msg.set_content(
+        "Le site EFFIA répond de nouveau. La surveillance des places "
+        "d'abonnement a repris normalement.\n\n— ParkingBot"
+    )
+    return msg
+
+
 def build_systemtest_email(detected: bool, station: str, n: int) -> EmailMessage:
     """Weekly end-to-end self-check email (clearly NOT a real spot alert).
 
